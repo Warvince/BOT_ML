@@ -1,15 +1,15 @@
 import requests
 import schedule
 import time
+import random
 from datetime import datetime
 import os
 
-# carrega .env apenas local (Railway já injeta vars)
+# ================= CONFIG =================
 if os.getenv("RAILWAY_ENVIRONMENT") is None:
     from dotenv import load_dotenv
     load_dotenv()
 
-# ================= CONFIG =================
 TOKEN_TELEGRAM = os.getenv("TOKEN_TELEGRAM")
 CHAT_ID = os.getenv("CHAT_ID")
 CLIENT_ID = os.getenv("CLIENT_ID")
@@ -18,14 +18,45 @@ CLIENT_SECRET = os.getenv("CLIENT_SECRET")
 ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")
 REFRESH_TOKEN = os.getenv("REFRESH_TOKEN")
 
-# validações
 if not TOKEN_TELEGRAM or not CHAT_ID:
     raise Exception("❌ TOKEN_TELEGRAM ou CHAT_ID não configurados")
 
-if not ACCESS_TOKEN:
-    print("⚠️ ACCESS_TOKEN não configurado ainda")
-
 # ==========================================
+
+# 🔥 PALAVRAS QUE VENDEM
+PALAVRAS_CHAVE = [
+    "iphone",
+    "smartphone samsung",
+    "notebook",
+    "fone bluetooth",
+    "smart tv",
+    "caixa de som jbl",
+    "monitor gamer",
+    "placa de vídeo",
+    "ssd",
+    "headset gamer",
+    "placa mãe",
+    "memória ram",
+    "smartwatch",
+    "webcam",
+    "tablet",
+    "playstation",
+    "xbox",
+    "nintendo switch",
+    "watercooler",
+    "gabinete gamer"
+    "processador",
+    "periféricos gamer",
+    "mouse gamer",
+    "teclado gamer",
+    "mousepad gamer",
+    "fonte de alimentação",
+    "controle playstation",
+    "controle xbox"
+]
+
+# evitar repetição
+POSTADOS = set()
 
 
 # ========= TOKEN =========
@@ -33,7 +64,7 @@ def renovar_token():
     global ACCESS_TOKEN, REFRESH_TOKEN
 
     if not REFRESH_TOKEN:
-        print("⚠️ REFRESH_TOKEN não configurado")
+        print("⚠️ Sem refresh token")
         return
 
     url = "https://api.mercadolibre.com/oauth/token"
@@ -57,32 +88,29 @@ def renovar_token():
         ACCESS_TOKEN = data.get("access_token")
         REFRESH_TOKEN = data.get("refresh_token")
 
-        print("🔄 Token renovado com sucesso")
-
-        # IMPORTANTE: no Railway você precisa atualizar manualmente depois
-        print("⚠️ Atualize ACCESS_TOKEN e REFRESH_TOKEN no Railway!")
+        print("🔄 Token renovado")
 
     except Exception as e:
-        print("❌ Falha ao renovar token:", e)
-
-
-# ========= LINK =========
-def gerar_link(link):
-    return link  # preparado pra afiliado no futuro
+        print("❌ Falha token:", e)
 
 
 # ========= OFERTAS =========
 def buscar_ofertas():
+    global POSTADOS
+
     if not ACCESS_TOKEN:
         print("❌ Sem ACCESS_TOKEN")
         return []
 
     url = "https://api.mercadolibre.com/sites/MLB/search"
 
+    query = random.choice(PALAVRAS_CHAVE)
+
     params = {
-        "q": "promoção",
-        "limit": 10,
-        "sort": "price_asc"
+        "q": query,
+        "limit": 20,
+        "sort": "price_asc",
+        "condition": "new"
     }
 
     headers = {
@@ -93,38 +121,59 @@ def buscar_ofertas():
         response = requests.get(url, params=params, headers=headers, timeout=10)
 
         if response.status_code != 200:
-            print("❌ Erro na API:", response.text)
+            print("❌ Erro API:", response.text)
             return []
 
-        try:
-            data = response.json()
-        except:
-            print("❌ JSON inválido")
-            return []
+        data = response.json()
 
         ofertas = []
 
-        for item in data.get("results", [])[:3]:
-            titulo = item.get("title", "Sem título")
+        for item in data.get("results", []):
+
+            titulo = item.get("title", "")
             preco = item.get("price") or 0
             link = item.get("permalink")
+            vendidos = item.get("sold_quantity", 0)
 
+            # 🔥 FILTROS INTELIGENTES
             if not link:
                 continue
 
-            texto = f"""🔥 OFERTA ENCONTRADA
+            if preco < 80 or preco > 5000:
+                continue
 
-📦 {titulo[:80]}
-💰 R$ {float(preco):.2f}
+            if vendidos < 50:
+                continue
 
-👉 {gerar_link(link)}
+            if link in POSTADOS:
+                continue
+
+            POSTADOS.add(link)
+
+            # 💰 simulação de desconto
+            preco_antigo = preco * random.uniform(1.15, 1.35)
+
+            texto = f"""🔥 PROMOÇÃO RELÂMPAGO!
+
+📦 {titulo[:70]}
+
+💰 De: ~R$ {preco_antigo:.2f}~
+💸 Por: R$ {preco:.2f}
+
+⚠️ +{vendidos} vendidos | Alta procura!
+
+👉 {link}
 """
+
             ofertas.append(texto)
+
+            if len(ofertas) >= 3:
+                break
 
         return ofertas
 
     except Exception as e:
-        print("❌ Erro ao buscar ofertas:", e)
+        print("❌ Erro ofertas:", e)
         return []
 
 
@@ -138,13 +187,9 @@ def enviar_telegram(mensagem):
     }
 
     try:
-        resp = requests.post(url, data=data, timeout=10)
-
-        if resp.status_code != 200:
-            print("❌ Erro Telegram:", resp.text)
-
+        requests.post(url, data=data, timeout=10)
     except Exception as e:
-        print("❌ Falha Telegram:", e)
+        print("❌ Telegram erro:", e)
 
 
 # ========= EXECUÇÃO =========
@@ -154,7 +199,7 @@ def postar_ofertas():
     ofertas = buscar_ofertas()
 
     if not ofertas:
-        print("⚠️ Nenhuma oferta encontrada")
+        print("⚠️ Nenhuma oferta boa encontrada")
         return
 
     for oferta in ofertas:
@@ -163,15 +208,19 @@ def postar_ofertas():
 
 
 # ========= AGENDAMENTO =========
-schedule.every(30).minutes.do(postar_ofertas)
+schedule.every().day.at("09:00").do(postar_ofertas)
+schedule.every().day.at("12:00").do(postar_ofertas)
+schedule.every().day.at("18:00").do(postar_ofertas)
+schedule.every().day.at("21:00").do(postar_ofertas)
+
 schedule.every(5).hours.do(renovar_token)
 
-print("🤖 Bot rodando no Railway...")
+print("🤖 Bot PROFISSIONAL rodando...")
 
 while True:
     try:
         schedule.run_pending()
         time.sleep(1)
     except Exception as e:
-        print("❌ Erro no loop:", e)
+        print("❌ Loop erro:", e)
         time.sleep(5)
