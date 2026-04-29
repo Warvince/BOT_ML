@@ -1,6 +1,6 @@
-import os
+from flask import Flask, request, jsonify
 import requests
-from flask import Flask, request
+import os
 
 app = Flask(__name__)
 
@@ -19,17 +19,24 @@ def oauth():
     if not code:
         return "❌ Sem code"
 
-    url = "https://api.mercadolibre.com/oauth/token"
+    try:
+        url = "https://api.mercadolibre.com/oauth/token"
 
-    payload = {
-        "grant_type": "authorization_code",
-        "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET,
-        "code": code,
-        "redirect_uri": REDIRECT_URI
-    }
+        payload = {
+            "grant_type": "authorization_code",
+            "client_id": CLIENT_ID,
+            "client_secret": CLIENT_SECRET,
+            "code": code,
+            "redirect_uri": REDIRECT_URI
+        }
 
-    resp = requests.post(url, data=payload)
-    data = resp.json()
+        resp = requests.post(url, data=payload, timeout=10)
 
-    return data  # mostra token pra você copiar
+        return jsonify(resp.json())
+
+    except Exception as e:
+        return f"Erro: {str(e)}"
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=8080)
