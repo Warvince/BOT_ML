@@ -67,7 +67,7 @@ def renovar_token():
         print("⚠️ Sem refresh token")
         return
 
-    url = "https://api.mercadolibre.com/oauth/token"
+    url = "https://api.mercadolivre.com/oauth/token"
 
     payload = {
         "grant_type": "refresh_token",
@@ -102,7 +102,7 @@ def buscar_ofertas():
         print("❌ Sem ACCESS_TOKEN")
         return []
 
-    url = "https://api.mercadolibre.com/sites/MLB/search"
+    url = "https://api.mercadolivre.com/sites/MLB/search"
 
     query = random.choice(PALAVRAS_CHAVE)
 
