@@ -5,27 +5,6 @@ import random
 from datetime import datetime
 import os
 
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-from urllib3.util.connection import allowed_gai_family
-
-# Força IPv4
-def create_ipv4_adapter():
-    session = requests.Session()
-    retry_strategy = Retry(total=3, backoff_factor=1)
-    adapter = HTTPAdapter(
-        pool_connections=1,
-        pool_maxsize=1,
-        max_retries=retry_strategy,
-        socket_options=[(6, 2)]  # IPV4_ONLY if available
-    )
-    session.mount("http://", adapter)
-    session.mount("https://", adapter)
-    return session
-
-session = create_ipv4_adapter()
-response = session.get('https://api.mercadolivre.com/sites/MLB/search?q=controle+xbox&limit=20&sort=price_asc&condition=new')
-
 # ================= CONFIG =================
 if os.getenv("RAILWAY_ENVIRONMENT") is None:
     from dotenv import load_dotenv
