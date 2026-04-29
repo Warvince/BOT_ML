@@ -242,7 +242,11 @@ schedule.every().day.at("19:00").do(postar_ofertas)
 schedule.every().day.at("19:30").do(postar_ofertas)
 schedule.every().day.at("20:00").do(postar_ofertas)
 schedule.every().day.at("20:30").do(postar_ofertas)
+schedule.every().day.at("20:40").do(postar_ofertas)
+schedule.every().day.at("20:50").do(postar_ofertas)
 schedule.every().day.at("21:00").do(postar_ofertas)
+schedule.every().day.at("21:10").do(postar_ofertas)
+schedule.every().day.at("21:20").do(postar_ofertas)
 
 schedule.every(5).hours.do(renovar_token)
 
