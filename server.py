@@ -20,7 +20,7 @@ def oauth():
         return "❌ Sem code"
 
     try:
-        url = "https://api.mercadolibre.com/oauth/token"
+        url = "https://api.mercadolivre.com/oauth/token"
 
         payload = {
             "grant_type": "authorization_code",
