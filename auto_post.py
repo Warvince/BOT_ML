@@ -1,12 +1,13 @@
 import requests
 import schedule
 import time
-import json
 from datetime import datetime
-from dotenv import load_dotenv
 import os
 
-load_dotenv()
+# carrega .env apenas local (Railway já injeta vars)
+if os.getenv("RAILWAY_ENVIRONMENT") is None:
+    from dotenv import load_dotenv
+    load_dotenv()
 
 # ================= CONFIG =================
 TOKEN_TELEGRAM = os.getenv("TOKEN_TELEGRAM")
@@ -14,83 +15,66 @@ CHAT_ID = os.getenv("CHAT_ID")
 CLIENT_ID = os.getenv("CLIENT_ID")
 CLIENT_SECRET = os.getenv("CLIENT_SECRET")
 
-TOKEN_FILE = "config.json"
+ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")
+REFRESH_TOKEN = os.getenv("REFRESH_TOKEN")
 
-# validação básica
+# validações
 if not TOKEN_TELEGRAM or not CHAT_ID:
-    raise Exception("❌ TOKEN_TELEGRAM ou CHAT_ID não configurados no .env")
+    raise Exception("❌ TOKEN_TELEGRAM ou CHAT_ID não configurados")
+
+if not ACCESS_TOKEN:
+    print("⚠️ ACCESS_TOKEN não configurado ainda")
 
 # ==========================================
 
 
 # ========= TOKEN =========
-def carregar_token():
-    if not os.path.exists(TOKEN_FILE):
-        print("❌ config.json não encontrado")
-        return None
-
-    try:
-        with open(TOKEN_FILE) as f:
-            data = json.load(f)
-            return data.get("access_token")
-    except Exception as e:
-        print("❌ Erro ao ler token:", e)
-        return None
-
-
 def renovar_token():
-    if not os.path.exists(TOKEN_FILE):
-        print("⚠️ Token não encontrado para renovar")
+    global ACCESS_TOKEN, REFRESH_TOKEN
+
+    if not REFRESH_TOKEN:
+        print("⚠️ REFRESH_TOKEN não configurado")
         return
 
+    url = "https://api.mercadolibre.com/oauth/token"
+
+    payload = {
+        "grant_type": "refresh_token",
+        "client_id": CLIENT_ID,
+        "client_secret": CLIENT_SECRET,
+        "refresh_token": REFRESH_TOKEN
+    }
+
     try:
-        with open(TOKEN_FILE) as f:
-            data = json.load(f)
-
-        if "refresh_token" not in data:
-            print("❌ refresh_token não encontrado")
-            return
-
-        url = "https://api.mercadolibre.com/oauth/token"
-
-        payload = {
-            "grant_type": "refresh_token",
-            "client_id": CLIENT_ID,
-            "client_secret": CLIENT_SECRET,
-            "refresh_token": data["refresh_token"]
-        }
-
         resp = requests.post(url, data=payload, timeout=10)
 
         if resp.status_code != 200:
             print("❌ Erro ao renovar token:", resp.text)
             return
 
-        novo = resp.json()
+        data = resp.json()
 
-        with open(TOKEN_FILE, "w") as f:
-            json.dump({
-                "access_token": novo.get("access_token"),
-                "refresh_token": novo.get("refresh_token")
-            }, f)
+        ACCESS_TOKEN = data.get("access_token")
+        REFRESH_TOKEN = data.get("refresh_token")
 
         print("🔄 Token renovado com sucesso")
+
+        # IMPORTANTE: no Railway você precisa atualizar manualmente depois
+        print("⚠️ Atualize ACCESS_TOKEN e REFRESH_TOKEN no Railway!")
 
     except Exception as e:
         print("❌ Falha ao renovar token:", e)
 
 
-# ========= LINK (PREPARADO PRA AFILIADO FUTURO) =========
+# ========= LINK =========
 def gerar_link(link):
-    # futuramente você pode integrar afiliado real aqui
-    return link
+    return link  # preparado pra afiliado no futuro
 
 
 # ========= OFERTAS =========
 def buscar_ofertas():
-    ACCESS_TOKEN = carregar_token()
-
     if not ACCESS_TOKEN:
+        print("❌ Sem ACCESS_TOKEN")
         return []
 
     url = "https://api.mercadolibre.com/sites/MLB/search"
@@ -115,7 +99,7 @@ def buscar_ofertas():
         try:
             data = response.json()
         except:
-            print("❌ Resposta inválida da API")
+            print("❌ JSON inválido")
             return []
 
         ofertas = []
@@ -128,14 +112,12 @@ def buscar_ofertas():
             if not link:
                 continue
 
-            link_final = gerar_link(link)
-
             texto = f"""🔥 OFERTA ENCONTRADA
 
 📦 {titulo[:80]}
 💰 R$ {float(preco):.2f}
 
-👉 {link_final}
+👉 {gerar_link(link)}
 """
             ofertas.append(texto)
 
@@ -159,10 +141,10 @@ def enviar_telegram(mensagem):
         resp = requests.post(url, data=data, timeout=10)
 
         if resp.status_code != 200:
-            print("❌ Erro ao enviar mensagem:", resp.text)
+            print("❌ Erro Telegram:", resp.text)
 
     except Exception as e:
-        print("❌ Falha no Telegram:", e)
+        print("❌ Falha Telegram:", e)
 
 
 # ========= EXECUÇÃO =========
@@ -184,12 +166,12 @@ def postar_ofertas():
 schedule.every(30).minutes.do(postar_ofertas)
 schedule.every(5).hours.do(renovar_token)
 
-print("🤖 Bot rodando automaticamente...")
+print("🤖 Bot rodando no Railway...")
 
 while True:
     try:
         schedule.run_pending()
         time.sleep(1)
     except Exception as e:
-        print("❌ Erro no loop principal:", e)
+        print("❌ Erro no loop:", e)
         time.sleep(5)
