@@ -5,6 +5,11 @@ import random
 from datetime import datetime
 import os
 
+import socket
+
+# força resolver mais estável (cloud fallback)
+socket.setdefaulttimeout(10)
+
 # ================= CONFIG =================
 if os.getenv("RAILWAY_ENVIRONMENT") is None:
     from dotenv import load_dotenv
@@ -30,11 +35,13 @@ session = requests.Session()
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+session = requests.Session()
+
 retry = Retry(
-    total=5,
-    backoff_factor=1,
+    total=7,
+    backoff_factor=2,
     status_forcelist=[500, 502, 503, 504],
-    allowed_methods=["GET", "POST"]
+    allowed_methods=["GET"]
 )
 
 adapter = HTTPAdapter(max_retries=retry)
