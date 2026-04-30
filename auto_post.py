@@ -10,6 +10,15 @@ import socket
 # força resolver mais estável (cloud fallback)
 socket.setdefaulttimeout(10)
 
+import os
+
+os.environ["PYTHONHTTPSVERIFY"] = "0"
+
+try:
+    print(socket.gethostbyname("api.mercadolivre.com"))
+except Exception as e:
+    print("DNS FALHOU:", e)
+
 # ================= CONFIG =================
 if os.getenv("RAILWAY_ENVIRONMENT") is None:
     from dotenv import load_dotenv
