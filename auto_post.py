@@ -23,7 +23,26 @@ if not TOKEN_TELEGRAM or not CHAT_ID:
 
 # ==========================================
 
-# 🔥 PALAVRAS QUE VENDEM
+# 🔧 SESSÃO GLOBAL (ROBUSTEZ + PERFORMANCE)
+session = requests.Session()
+
+# Retry automático contra falhas de rede / DNS / API instável
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+retry = Retry(
+    total=5,
+    backoff_factor=1,
+    status_forcelist=[500, 502, 503, 504],
+    allowed_methods=["GET", "POST"]
+)
+
+adapter = HTTPAdapter(max_retries=retry)
+session.mount("https://", adapter)
+session.mount("http://", adapter)
+
+
+# 🔥 PALAVRAS QUE VENDEM (BUG CORRIGIDO: vírgula faltando)
 PALAVRAS_CHAVE = [
     "iphone",
     "smartphone samsung",
@@ -44,7 +63,7 @@ PALAVRAS_CHAVE = [
     "xbox",
     "nintendo switch",
     "watercooler",
-    "gabinete gamer"
+    "gabinete gamer",
     "processador",
     "periféricos gamer",
     "mouse gamer",
@@ -55,7 +74,6 @@ PALAVRAS_CHAVE = [
     "controle xbox"
 ]
 
-# evitar repetição
 POSTADOS = set()
 
 
@@ -77,7 +95,7 @@ def renovar_token():
     }
 
     try:
-        resp = requests.post(url, data=payload, timeout=10)
+        resp = session.post(url, data=payload, timeout=15)
 
         if resp.status_code != 200:
             print("❌ Erro ao renovar token:", resp.text)
@@ -88,7 +106,7 @@ def renovar_token():
         ACCESS_TOKEN = data.get("access_token")
         REFRESH_TOKEN = data.get("refresh_token")
 
-        print("🔄 Token renovado")
+        print("🔄 Token renovado com sucesso")
 
     except Exception as e:
         print("❌ Falha token:", e)
@@ -114,17 +132,23 @@ def buscar_ofertas():
     }
 
     headers = {
-        "Authorization": f"Bearer {ACCESS_TOKEN}"
+        "Authorization": f"Bearer {ACCESS_TOKEN}",
+        "User-Agent": "Mozilla/5.0"
     }
 
     try:
-        response = requests.get(url, params=params, headers=headers, timeout=10)
+        response = session.get(url, params=params, headers=headers, timeout=15)
 
         if response.status_code != 200:
             print("❌ Erro API:", response.text)
             return []
 
-        data = response.json()
+        # proteção contra JSON quebrado
+        try:
+            data = response.json()
+        except:
+            print("❌ JSON inválido da API")
+            return []
 
         ofertas = []
 
@@ -135,7 +159,6 @@ def buscar_ofertas():
             link = item.get("permalink")
             vendidos = item.get("sold_quantity", 0)
 
-            # 🔥 FILTROS INTELIGENTES
             if not link:
                 continue
 
@@ -145,12 +168,12 @@ def buscar_ofertas():
             if vendidos < 50:
                 continue
 
+            agora = time.time()
             if link in POSTADOS:
-                continue
+                if agora - POSTADOS[link] < 3600:continue
 
-            POSTADOS.add(link)
+            POSTADOS[link] = agora
 
-            # 💰 simulação de desconto
             preco_antigo = preco * random.uniform(1.15, 1.35)
 
             texto = f"""🔥 PROMOÇÃO RELÂMPAGO!
@@ -187,7 +210,11 @@ def enviar_telegram(mensagem):
     }
 
     try:
-        requests.post(url, data=data, timeout=10)
+        resp = session.post(url, data=data, timeout=10)
+
+        if resp.status_code != 200:
+            print("❌ Erro Telegram:", resp.text)
+
     except Exception as e:
         print("❌ Telegram erro:", e)
 
@@ -207,47 +234,11 @@ def postar_ofertas():
         time.sleep(2)
 
 
-# ========= AGENDAMENTO =========
-schedule.every().day.at("09:00").do(postar_ofertas)
-schedule.every().day.at("09:30").do(postar_ofertas)
-schedule.every().day.at("10:00").do(postar_ofertas)
-schedule.every().day.at("10:30").do(postar_ofertas)
-schedule.every().day.at("11:00").do(postar_ofertas)
-schedule.every().day.at("11:30").do(postar_ofertas)
-schedule.every().day.at("12:00").do(postar_ofertas)
-schedule.every().day.at("12:30").do(postar_ofertas)
-schedule.every().day.at("13:00").do(postar_ofertas)
-schedule.every().day.at("13:30").do(postar_ofertas)
-schedule.every().day.at("14:00").do(postar_ofertas)
-schedule.every().day.at("14:30").do(postar_ofertas)
-schedule.every().day.at("15:00").do(postar_ofertas)
-schedule.every().day.at("15:30").do(postar_ofertas)
-schedule.every().day.at("16:00").do(postar_ofertas)
-schedule.every().day.at("16:30").do(postar_ofertas)
-schedule.every().day.at("17:00").do(postar_ofertas)
-schedule.every().day.at("17:15").do(postar_ofertas)
-schedule.every().day.at("17:20").do(postar_ofertas)
-schedule.every().day.at("17:30").do(postar_ofertas)
-schedule.every().day.at("17:50").do(postar_ofertas)
-schedule.every().day.at("18:00").do(postar_ofertas)
-schedule.every().day.at("18:20").do(postar_ofertas)
-schedule.every().day.at("18:25").do(postar_ofertas)
-schedule.every().day.at("18:30").do(postar_ofertas)
-schedule.every().day.at("18:35").do(postar_ofertas)
-schedule.every().day.at("18:40").do(postar_ofertas)
-schedule.every().day.at("18:45").do(postar_ofertas)
-schedule.every().day.at("18:50").do(postar_ofertas)
-schedule.every().day.at("18:55").do(postar_ofertas)
-schedule.every().day.at("19:00").do(postar_ofertas)
-schedule.every().day.at("19:30").do(postar_ofertas)
-schedule.every().day.at("20:00").do(postar_ofertas)
-schedule.every().day.at("20:30").do(postar_ofertas)
-schedule.every().day.at("20:40").do(postar_ofertas)
-schedule.every().day.at("20:50").do(postar_ofertas)
-schedule.every().day.at("21:00").do(postar_ofertas)
-schedule.every().day.at("21:10").do(postar_ofertas)
-schedule.every().day.at("21:20").do(postar_ofertas)
-schedule.every().day.at("21:40").do(postar_ofertas)
+# ========= AGENDAMENTO (5 EM 5 MINUTOS) =========
+
+schedule.every(5).minutes.do(postar_ofertas)
+
+schedule.every(5).hours.do(renovar_token)
 
 schedule.every(5).hours.do(renovar_token)
 
@@ -257,6 +248,7 @@ while True:
     try:
         schedule.run_pending()
         time.sleep(1)
+
     except Exception as e:
         print("❌ Loop erro:", e)
         time.sleep(5)
