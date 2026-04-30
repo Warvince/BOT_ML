@@ -247,6 +247,7 @@ schedule.every().day.at("20:50").do(postar_ofertas)
 schedule.every().day.at("21:00").do(postar_ofertas)
 schedule.every().day.at("21:10").do(postar_ofertas)
 schedule.every().day.at("21:20").do(postar_ofertas)
+schedule.every().day.at("21:40").do(postar_ofertas)
 
 schedule.every(5).hours.do(renovar_token)
 
