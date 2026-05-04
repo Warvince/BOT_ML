@@ -131,9 +131,15 @@ def renovar_token():
         return False
 
 
+# ========= OFERTAS =========
 def buscar_ofertas():
     """Busca ofertas na API do Mercado Livre."""
     global POSTADOS
+
+    if not ACCESS_TOKEN:
+        print("❌ ACCESS_TOKEN vazio. Tentando renovar...")
+        if not renovar_token():
+            return []
 
     url = "https://api.mercadolibre.com/sites/MLB/search"
 
@@ -146,18 +152,28 @@ def buscar_ofertas():
         "condition": "new"
     }
 
-    # 🆕 Endpoint público: NÃO enviar Authorization!
     headers = {
+        "Authorization": f"Bearer {ACCESS_TOKEN}",
         "User-Agent": "Mozilla/5.0"
     }
 
     try:
         response = session.get(url, params=params, headers=headers, timeout=15)
 
+        # 🆕 Se deu 401, tenta renovar o token e refaz a requisição
+        if response.status_code == 401:
+            print("⚠️ Token expirou (401). Renovando automaticamente...")
+            if renovar_token():
+                headers["Authorization"] = f"Bearer {ACCESS_TOKEN}"
+                response = session.get(url, params=params, headers=headers, timeout=15)
+            else:
+                print("❌ Não foi possível renovar o token.")
+                return []
+
         if response.status_code != 200:
             print(f"❌ Erro API ({response.status_code}):", response.text)
             return []
-        # ... resto do código continua igual
+
         # proteção contra JSON quebrado
         try:
             data = response.json()
