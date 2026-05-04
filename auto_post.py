@@ -15,7 +15,7 @@ import os
 os.environ["PYTHONHTTPSVERIFY"] = "0"
 
 try:
-    print(socket.gethostbyname("api.mercadolivre.com"))
+    print(socket.gethostbyname("api.mercadolibre.com"))
 except Exception as e:
     print("DNS FALHOU:", e)
 
@@ -101,7 +101,7 @@ def renovar_token():
         print("⚠️ Sem refresh token")
         return
 
-    url = "https://api.mercadolivre.com/oauth/token"
+    url = "https://api.mercadolibre.com/oauth/token"
 
     payload = {
         "grant_type": "refresh_token",
@@ -136,7 +136,7 @@ def buscar_ofertas():
         print("❌ Sem ACCESS_TOKEN")
         return []
 
-    url = "https://api.mercadolivre.com/sites/MLB/search"
+    url = "https://api.mercadolibre.com/sites/MLB/search"
 
     query = random.choice(PALAVRAS_CHAVE)
 
