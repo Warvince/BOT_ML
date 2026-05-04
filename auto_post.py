@@ -4,18 +4,15 @@ import time
 import random
 from datetime import datetime
 import os
-
 import socket
 
 # força resolver mais estável (cloud fallback)
 socket.setdefaulttimeout(10)
 
-import os
-
 os.environ["PYTHONHTTPSVERIFY"] = "0"
 
 try:
-    print(socket.gethostbyname("api.mercadolibre.com"))
+    print(socket.gethostbyname("api.mercadolivre.com"))
 except Exception as e:
     print("DNS FALHOU:", e)
 
@@ -44,8 +41,6 @@ session = requests.Session()
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-session = requests.Session()
-
 retry = Retry(
     total=7,
     backoff_factor=2,
@@ -58,7 +53,7 @@ session.mount("https://", adapter)
 session.mount("http://", adapter)
 
 
-# 🔥 PALAVRAS QUE VENDEM (BUG CORRIGIDO: vírgula faltando)
+# 🔥 PALAVRAS QUE VENDEM
 PALAVRAS_CHAVE = [
     "iphone",
     "smartphone samsung",
@@ -90,16 +85,18 @@ PALAVRAS_CHAVE = [
     "controle xbox"
 ]
 
-POSTADOS = set()
+# 🐛 CORREÇÃO: era 'set()', agora é dict para armazenar timestamp
+POSTADOS = {}
 
 
 # ========= TOKEN =========
 def renovar_token():
+    """Renova o access_token usando o refresh_token. Retorna True se sucesso."""
     global ACCESS_TOKEN, REFRESH_TOKEN
 
     if not REFRESH_TOKEN:
-        print("⚠️ Sem refresh token")
-        return
+        print("⚠️ REFRESH_TOKEN não configurado. É necessário refazer a autorização OAuth.")
+        return False
 
     url = "https://api.mercadolibre.com/oauth/token"
 
@@ -114,27 +111,35 @@ def renovar_token():
         resp = session.post(url, data=payload, timeout=15)
 
         if resp.status_code != 200:
-            print("❌ Erro ao renovar token:", resp.text)
-            return
+            print(f"❌ Erro ao renovar token ({resp.status_code}):", resp.text)
+            return False
 
         data = resp.json()
 
         ACCESS_TOKEN = data.get("access_token")
         REFRESH_TOKEN = data.get("refresh_token")
 
-        print("🔄 Token renovado com sucesso")
+        print("🔄 Token renovado com sucesso!")
+        print(f"   Novo Access Token: {ACCESS_TOKEN[:25]}...")
+        print(f"   Novo Refresh Token: {REFRESH_TOKEN[:25]}...")
+        print("⚠️  IMPORTANTE: Atualize o REFRESH_TOKEN no Railway Dashboard com o valor acima!")
+
+        return True
 
     except Exception as e:
-        print("❌ Falha token:", e)
+        print("❌ Falha ao renovar token:", e)
+        return False
 
 
 # ========= OFERTAS =========
 def buscar_ofertas():
+    """Busca ofertas na API do Mercado Livre."""
     global POSTADOS
 
     if not ACCESS_TOKEN:
-        print("❌ Sem ACCESS_TOKEN")
-        return []
+        print("❌ ACCESS_TOKEN vazio. Tentando renovar...")
+        if not renovar_token():
+            return []
 
     url = "https://api.mercadolibre.com/sites/MLB/search"
 
@@ -155,14 +160,24 @@ def buscar_ofertas():
     try:
         response = session.get(url, params=params, headers=headers, timeout=15)
 
+        # 🆕 Se deu 401, tenta renovar o token e refaz a requisição
+        if response.status_code == 401:
+            print("⚠️ Token expirou (401). Renovando automaticamente...")
+            if renovar_token():
+                headers["Authorization"] = f"Bearer {ACCESS_TOKEN}"
+                response = session.get(url, params=params, headers=headers, timeout=15)
+            else:
+                print("❌ Não foi possível renovar o token.")
+                return []
+
         if response.status_code != 200:
-            print("❌ Erro API:", response.text)
+            print(f"❌ Erro API ({response.status_code}):", response.text)
             return []
 
         # proteção contra JSON quebrado
         try:
             data = response.json()
-        except:
+        except Exception:
             print("❌ JSON inválido da API")
             return []
 
@@ -186,7 +201,8 @@ def buscar_ofertas():
 
             agora = time.time()
             if link in POSTADOS:
-                if agora - POSTADOS[link] < 3600:continue
+                if agora - POSTADOS[link] < 3600:
+                    continue
 
             POSTADOS[link] = agora
 
@@ -250,21 +266,28 @@ def postar_ofertas():
         time.sleep(2)
 
 
-# ========= AGENDAMENTO (5 EM 5 MINUTOS) =========
+# ========= INICIALIZAÇÃO E AGENDAMENTO =========
+print("🤖 Bot PROFISSIONAL iniciando...")
 
+# 🆕 Renova o token imediatamente ao iniciar (evita 401 no primeiro ciclo)
+if not ACCESS_TOKEN:
+    print("ℹ️ ACCESS_TOKEN não encontrado nas variáveis. Renovando...")
+    renovar_token()
+else:
+    print("ℹ️ ACCESS_TOKEN encontrado. Verificando validade com renovação preventiva...")
+    # Opcional: renovar de qualquer forma para garantir token fresco
+    renovar_token()
+
+# Agendamentos
 schedule.every(5).minutes.do(postar_ofertas)
+schedule.every(5).hours.do(renovar_token)  # token dura 6h, renova a cada 5h
 
-schedule.every(5).hours.do(renovar_token)
-
-schedule.every(5).hours.do(renovar_token)
-
-print("🤖 Bot PROFISSIONAL rodando...")
+print("✅ Bot rodando. Aguardando próximos ciclos...")
 
 while True:
     try:
         schedule.run_pending()
         time.sleep(1)
-
     except Exception as e:
         print("❌ Loop erro:", e)
         time.sleep(5)
