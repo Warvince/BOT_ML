@@ -5,7 +5,7 @@ import random
 import re
 from datetime import datetime
 import xml.etree.ElementTree as ET
-import os  # ← IMPORTAÇÃO ADICIONADA
+import os
 
 # ================= CONFIGURAÇÃO =================
 if os.getenv("RAILWAY_ENVIRONMENT") is None:
@@ -14,9 +14,7 @@ if os.getenv("RAILWAY_ENVIRONMENT") is None:
 
 TOKEN_TELEGRAM = os.getenv("TOKEN_TELEGRAM")
 CHAT_ID = os.getenv("CHAT_ID")
-
-# 🔑 LOMADEE API v3
-LOMADEE_API_KEY = os.getenv("LOMADEE_API_KEY")  # x-api-key
+LOMADEE_API_KEY = os.getenv("LOMADEE_API_KEY")
 
 if not TOKEN_TELEGRAM or not CHAT_ID:
     raise Exception("❌ TOKEN_TELEGRAM ou CHAT_ID não configurados nas variáveis de ambiente")
@@ -25,29 +23,13 @@ if not TOKEN_TELEGRAM or not CHAT_ID:
 
 # 🔥 PALAVRAS-CHAVE PARA BUSCA NA LOMADEE
 PALAVRAS_CHAVE = [
-    "iphone",
-    "smartphone samsung",
-    "notebook",
-    "fone bluetooth",
-    "smart tv",
-    "caixa de som",
-    "monitor",
-    "placa de video",
-    "ssd",
-    "headset",
-    "smartwatch",
-    "tablet",
-    "playstation",
-    "xbox",
-    "nintendo switch",
-    "gabinete gamer",
-    "processador",
-    "mouse gamer",
-    "teclado gamer",
-    "fonte",
+    "iphone", "smartphone samsung", "notebook", "fone bluetooth", "smart tv",
+    "caixa de som", "monitor", "placa de video", "ssd", "headset",
+    "smartwatch", "tablet", "playstation", "xbox", "nintendo switch",
+    "gabinete gamer", "processador", "mouse gamer", "teclado gamer", "fonte",
 ]
 
-# 🔥 RSS FEEDS BRASILEIROS (FALLBACK se Lomadee não configurada)
+# 🔥 RSS FEEDS BRASILEIROS (FALLBACK)
 RSS_FEEDS = [
     "https://www.promobit.com.br/rss/",
     "https://gatry.com/rss/",
@@ -68,29 +50,26 @@ session.headers.update({
     "Accept": "application/json"
 })
 
-# Rate limit Lomadee: 10 req/min
 ULTIMA_REQ_LOMADEE = 0
 
 
 # ========= FUNÇÕES AUXILIARES =========
 def respeitar_rate_limit():
-    """Garante intervalo mínimo de 6 segundos entre chamadas Lomadee (10 req/min)."""
+    """Garante intervalo mínimo de 7 segundos entre chamadas Lomadee."""
     global ULTIMA_REQ_LOMADEE
     agora = time.time()
     tempo_decorrido = agora - ULTIMA_REQ_LOMADEE
-    if tempo_decorrido < 6:
-        time.sleep(6 - tempo_decorrido)
+    if tempo_decorrido < 7:
+        time.sleep(7 - tempo_decorrido)
     ULTIMA_REQ_LOMADEE = time.time()
 
 
 def extrair_preco(texto):
-    """Tenta extrair preço de um texto usando regex."""
     if not texto:
         return None
     padroes = [
         r'R\$\s*([\d\.]+(?:,\d{2})?)',
         r'por\s*R\$\s*([\d\.]+(?:,\d{2})?)',
-        r'([\d\.]+(?:,\d{2})?)\s*reais',
     ]
     for padrao in padroes:
         match = re.search(padrao, texto, re.IGNORECASE)
@@ -104,41 +83,59 @@ def extrair_preco(texto):
 
 
 def limpar_html(texto):
-    """Remove tags HTML básicas."""
     if not texto:
         return ""
     texto = re.sub(r"<[^>]+>", "", texto)
     texto = texto.replace("&nbsp;", " ").replace("&amp;", "&")
-    texto = texto.replace("&lt;", "<").replace("&gt;", ">")
     return texto.strip()
 
 
-# ========= LOMADEE API v3 =========
-def buscar_campaigns_lomadee():
-    """Busca campanhas ativas (cupons e ofertas) na Lomadee."""
+# ========= LOMADEE API =========
+def buscar_lomadee():
+    """Busca ofertas na Lomadee API v3."""
     if not LOMADEE_API_KEY:
+        print("ℹ️ LOMADEE_API_KEY não configurada.")
         return []
 
-    url = "https://api.lomadee.com.br/v3/campaigns"
+    ofertas = []
+
+    # 🥇 Tenta buscar campanhas/ofertas ativas
+    url = "https://api-beta.lomadee.com.br/v3/campaigns"
     headers = {"x-api-key": LOMADEE_API_KEY}
 
-    ofertas = []
     try:
         respeitar_rate_limit()
+        print(f"🔑 Chamando Lomadee: {url}")
         resp = session.get(url, headers=headers, timeout=20)
 
+        print(f"📡 Status Lomadee: {resp.status_code}")
+
         if resp.status_code == 401:
-            print("❌ Lomadee API Key inválida. Verifique sua x-api-key.")
+            print("❌ Lomadee API Key inválida (401).")
             return []
         if resp.status_code == 429:
-            print("⚠️ Rate limit atingido na Lomadee. Aguarde...")
+            print("⚠️ Rate limit Lomadee (429).")
             return []
         if resp.status_code != 200:
-            print(f"⚠️ Lomadee campaigns retornou {resp.status_code}:", resp.text[:200])
+            print(f"⚠️ Lomadee retornou {resp.status_code}: {resp.text[:300]}")
             return []
 
-        data = resp.json()
+        # Verifica se a resposta é JSON válido
+        content_type = resp.headers.get('content-type', '')
+        if 'application/json' not in content_type:
+            print(f"⚠️ Lomadee retornou content-type: {content_type} (esperava JSON)")
+            print(f"   Resposta: {resp.text[:300]}")
+            return []
+
+        try:
+            data = resp.json()
+        except Exception as e:
+            print(f"❌ Lomadee retornou JSON inválido: {e}")
+            print(f"   Resposta bruta: {resp.text[:300]}")
+            return []
+
         campaigns = data.get("data", [])
+        print(f"📦 {len(campaigns)} campanhas encontradas na Lomadee")
 
         for camp in campaigns:
             if camp.get("status") != "active":
@@ -160,85 +157,26 @@ def buscar_campaigns_lomadee():
                 "link": link,
                 "preco": preco,
                 "descricao": descricao[:200],
-                "fonte": "Lomadee Campaign"
+                "fonte": "Lomadee"
             })
             POSTADOS.add(link)
 
-            if len(ofertas) >= 5:
+            if len(ofertas) >= 8:
                 break
 
+    except requests.exceptions.Timeout:
+        print("❌ Timeout na Lomadee API")
+    except requests.exceptions.ConnectionError:
+        print("❌ Erro de conexão com Lomadee API")
     except Exception as e:
-        print(f"❌ Erro Lomadee campaigns: {e}")
-
-    return ofertas
-
-
-def buscar_produtos_lomadee():
-    """Busca produtos na Lomadee por palavras-chave."""
-    if not LOMADEE_API_KEY:
-        return []
-
-    ofertas = []
-    query = random.choice(PALAVRAS_CHAVE)
-
-    url = "https://api.lomadee.com.br/v3/products"
-    headers = {"x-api-key": LOMADEE_API_KEY}
-    params = {
-        "q": query,
-        "limit": 10,
-        "page": 1
-    }
-
-    try:
-        respeitar_rate_limit()
-        resp = session.get(url, headers=headers, params=params, timeout=20)
-
-        if resp.status_code == 401:
-            print("❌ Lomadee API Key inválida. Verifique sua x-api-key.")
-            return []
-        if resp.status_code == 429:
-            print("⚠️ Rate limit atingido na Lomadee. Aguarde...")
-            return []
-        if resp.status_code != 200:
-            print(f"⚠️ Lomadee products retornou {resp.status_code}:", resp.text[:200])
-            return []
-
-        data = resp.json()
-        produtos = data.get("data", [])
-
-        for prod in produtos:
-            titulo = prod.get("name", "")
-            link = prod.get("trackingUrl") or prod.get("url", "")
-            preco = prod.get("price")
-            loja = prod.get("store", "")
-
-            if not link or link in POSTADOS:
-                continue
-
-            if preco and (preco < PRECO_MIN or preco > PRECO_MAX):
-                continue
-
-            ofertas.append({
-                "titulo": titulo[:100],
-                "link": link,
-                "preco": preco,
-                "descricao": f"Loja: {loja}" if loja else "",
-                "fonte": "Lomadee Products"
-            })
-            POSTADOS.add(link)
-
-            if len(ofertas) >= 5:
-                break
-
-    except Exception as e:
-        print(f"❌ Erro Lomadee products: {e}")
+        print(f"❌ Erro Lomadee: {e}")
 
     return ofertas
 
 
 # ========= RSS FEEDS (FALLBACK) =========
 def buscar_ofertas_rss():
-    """Busca ofertas nos feeds RSS (fallback se Lomadee falhar)."""
+    """Busca ofertas nos feeds RSS."""
     ofertas = []
 
     for feed_url in RSS_FEEDS:
@@ -247,6 +185,7 @@ def buscar_ofertas_rss():
             resp = session.get(feed_url, timeout=20)
 
             if resp.status_code != 200:
+                print(f"⚠️ RSS {feed_url} retornou {resp.status_code}")
                 continue
 
             root = ET.fromstring(resp.content)
@@ -255,6 +194,8 @@ def buscar_ofertas_rss():
                 items = root.findall(".//{http://purl.org/rss/1.0/}item")
             if not items:
                 items = root.findall(".//{http://www.w3.org/2005/Atom}entry")
+
+            print(f"📄 {len(items)} itens no RSS {feed_url}")
 
             for item in items:
                 titulo_elem = item.find("title")
@@ -285,6 +226,8 @@ def buscar_ofertas_rss():
                 if len(ofertas) >= 10:
                     break
 
+        except ET.ParseError as e:
+            print(f"❌ XML inválido em {feed_url}: {e}")
         except Exception as e:
             print(f"⚠️ Erro RSS {feed_url}: {e}")
 
@@ -293,7 +236,6 @@ def buscar_ofertas_rss():
 
 # ========= TELEGRAM =========
 def enviar_telegram(mensagem):
-    """Envia mensagem para o canal do Telegram."""
     url = f"https://api.telegram.org/bot{TOKEN_TELEGRAM}/sendMessage"
 
     data = {
@@ -315,7 +257,6 @@ def enviar_telegram(mensagem):
 
 # ========= FORMATAÇÃO =========
 def formatar_oferta(oferta):
-    """Formata a oferta em mensagem para o Telegram."""
     titulo = oferta["titulo"]
     link = oferta["link"]
     preco = oferta["preco"]
@@ -350,22 +291,24 @@ def formatar_oferta(oferta):
 
 # ========= EXECUÇÃO PRINCIPAL =========
 def postar_ofertas():
-    """Busca ofertas na Lomadee (prioridade) e RSS (fallback)."""
     print(f"\n🤖 [{datetime.now()}] Iniciando busca de ofertas...")
 
     ofertas = []
 
-    # 🥇 PRIORIDADE 1: Lomadee (com comissão)
+    # 🥇 PRIORIDADE 1: Lomadee
     if LOMADEE_API_KEY:
-        print("🔑 Buscando na Lomadee API...")
-        ofertas += buscar_campaigns_lomadee()
-        ofertas += buscar_produtos_lomadee()
+        print("🔑 Modo Lomadee ativo. Buscando campanhas...")
+        ofertas_lomadee = buscar_lomadee()
+        ofertas += ofertas_lomadee
+
+        if not ofertas_lomadee:
+            print("⚠️ Lomadee não retornou ofertas. Verifique se a API Key está correta.")
     else:
         print("ℹ️ LOMADEE_API_KEY não configurada. Pulando Lomadee.")
 
-    # 🥈 PRIORIDADE 2: RSS feeds (fallback)
-    if not ofertas:
-        print("📡 Nenhuma oferta Lomadee. Buscando RSS feeds...")
+    # 🥈 PRIORIDADE 2: RSS feeds (sempre busca, mesmo que Lomadee tenha retornado algo)
+    if len(ofertas) < 3:
+        print("📡 Buscando RSS feeds para complementar...")
         ofertas += buscar_ofertas_rss()
 
     if not ofertas:
@@ -396,11 +339,10 @@ if __name__ == "__main__":
         print(f"   API Key: {LOMADEE_API_KEY[:10]}...")
     else:
         print("📡 Modo: RSS Feeds (sem comissão - fallback)")
-        print("   Para ganhar comissão, configure LOMADEE_API_KEY")
+        print("   Configure LOMADEE_API_KEY para ganhar comissão")
 
     print("=" * 55)
 
-    # Primeira execução imediata
     postar_ofertas()
 
     print("\n⏳ Aguardando próximos ciclos...")
