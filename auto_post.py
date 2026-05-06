@@ -2,292 +2,414 @@ import requests
 import schedule
 import time
 import random
+import re
 from datetime import datetime
-import os
-import socket
+import xml.etree.ElementTree as ET
 
-# força resolver mais estável (cloud fallback)
-socket.setdefaulttimeout(10)
-
-os.environ["PYTHONHTTPSVERIFY"] = "0"
-
-try:
-    print(socket.gethostbyname("api.mercadolivre.com"))
-except Exception as e:
-    print("DNS FALHOU:", e)
-
-# ================= CONFIG =================
+# ================= CONFIGURAÇÃO =================
 if os.getenv("RAILWAY_ENVIRONMENT") is None:
     from dotenv import load_dotenv
     load_dotenv()
 
 TOKEN_TELEGRAM = os.getenv("TOKEN_TELEGRAM")
 CHAT_ID = os.getenv("CHAT_ID")
-CLIENT_ID = os.getenv("CLIENT_ID")
-CLIENT_SECRET = os.getenv("CLIENT_SECRET")
 
-ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")
-REFRESH_TOKEN = os.getenv("REFRESH_TOKEN")
+# 🔑 LOMADEE API v3
+LOMADEE_API_KEY = os.getenv("LOMADEE_API_KEY")  # x-api-key
 
 if not TOKEN_TELEGRAM or not CHAT_ID:
-    raise Exception("❌ TOKEN_TELEGRAM ou CHAT_ID não configurados")
+    raise Exception("❌ TOKEN_TELEGRAM ou CHAT_ID não configurados nas variáveis de ambiente")
 
-# ==========================================
+# ================================================
 
-# 🔧 SESSÃO GLOBAL (ROBUSTEZ + PERFORMANCE)
-session = requests.Session()
-
-# Retry automático contra falhas de rede / DNS / API instável
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-
-retry = Retry(
-    total=7,
-    backoff_factor=2,
-    status_forcelist=[500, 502, 503, 504],
-    allowed_methods=["GET"]
-)
-
-adapter = HTTPAdapter(max_retries=retry)
-session.mount("https://", adapter)
-session.mount("http://", adapter)
-
-
-# 🔥 PALAVRAS QUE VENDEM
+# 🔥 PALAVRAS-CHAVE PARA BUSCA NA LOMADEE
 PALAVRAS_CHAVE = [
     "iphone",
     "smartphone samsung",
     "notebook",
     "fone bluetooth",
     "smart tv",
-    "caixa de som jbl",
-    "monitor gamer",
-    "placa de vídeo",
+    "caixa de som",
+    "monitor",
+    "placa de video",
     "ssd",
-    "headset gamer",
-    "placa mãe",
-    "memória ram",
+    "headset",
     "smartwatch",
-    "webcam",
     "tablet",
     "playstation",
     "xbox",
     "nintendo switch",
-    "watercooler",
     "gabinete gamer",
     "processador",
-    "periféricos gamer",
     "mouse gamer",
     "teclado gamer",
-    "mousepad gamer",
-    "fonte de alimentação",
-    "controle playstation",
-    "controle xbox"
+    "fonte",
 ]
 
-# 🐛 CORREÇÃO: era 'set()', agora é dict para armazenar timestamp
-POSTADOS = {}
+# 🔥 RSS FEEDS BRASILEIROS (FALLBACK se Lomadee não configurada)
+RSS_FEEDS = [
+    "https://www.promobit.com.br/rss/",
+    "https://gatry.com/rss/",
+    "https://www.pelando.com.br/rss",
+]
+
+# 🛡️ Controle de duplicatas
+POSTADOS = set()
+
+# 💰 Filtros de preço
+PRECO_MIN = 10.0
+PRECO_MAX = 8000.0
+
+# 🔧 SESSÃO HTTP
+session = requests.Session()
+session.headers.update({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Accept": "application/json"
+})
+
+# Rate limit Lomadee: 10 req/min
+ULTIMA_REQ_LOMADEE = 0
 
 
-# ========= TOKEN =========
-def renovar_token():
-    """Renova o access_token usando o refresh_token. Retorna True se sucesso."""
-    global ACCESS_TOKEN, REFRESH_TOKEN
+# ========= FUNÇÕES AUXILIARES =========
+def respeitar_rate_limit():
+    """Garante intervalo mínimo de 6 segundos entre chamadas Lomadee (10 req/min)."""
+    global ULTIMA_REQ_LOMADEE
+    agora = time.time()
+    tempo_decorrido = agora - ULTIMA_REQ_LOMADEE
+    if tempo_decorrido < 6:
+        time.sleep(6 - tempo_decorrido)
+    ULTIMA_REQ_LOMADEE = time.time()
 
-    if not REFRESH_TOKEN:
-        print("⚠️ REFRESH_TOKEN não configurado. É necessário refazer a autorização OAuth.")
-        return False
 
-    url = "https://api.mercadolibre.com/oauth/token"
+def extrair_preco(texto):
+    """Tenta extrair preço de um texto usando regex."""
+    if not texto:
+        return None
+    padroes = [
+        r'R\$\s*([\d\.]+(?:,\d{2})?)',
+        r'por\s*R\$\s*([\d\.]+(?:,\d{2})?)',
+        r'([\d\.]+(?:,\d{2})?)\s*reais',
+    ]
+    for padrao in padroes:
+        match = re.search(padrao, texto, re.IGNORECASE)
+        if match:
+            valor_str = match.group(1).replace(".", "").replace(",", ".")
+            try:
+                return float(valor_str)
+            except ValueError:
+                continue
+    return None
 
-    payload = {
-        "grant_type": "refresh_token",
-        "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET,
-        "refresh_token": REFRESH_TOKEN
-    }
 
+def limpar_html(texto):
+    """Remove tags HTML básicas."""
+    if not texto:
+        return ""
+    texto = re.sub(r"<[^>]+>", "", texto)
+    texto = texto.replace("&nbsp;", " ").replace("&amp;", "&")
+    texto = texto.replace("&lt;", "<").replace("&gt;", ">")
+    return texto.strip()
+
+
+# ========= LOMADEE API v3 =========
+def buscar_campaigns_lomadee():
+    """Busca campanhas ativas (cupons e ofertas) na Lomadee."""
+    if not LOMADEE_API_KEY:
+        return []
+
+    url = "https://api.lomadee.com.br/v3/campaigns"
+    headers = {"x-api-key": LOMADEE_API_KEY}
+
+    ofertas = []
     try:
-        resp = session.post(url, data=payload, timeout=15)
+        respeitar_rate_limit()
+        resp = session.get(url, headers=headers, timeout=20)
 
+        if resp.status_code == 401:
+            print("❌ Lomadee API Key inválida. Verifique sua x-api-key.")
+            return []
+        if resp.status_code == 429:
+            print("⚠️ Rate limit atingido na Lomadee. Aguarde...")
+            return []
         if resp.status_code != 200:
-            print(f"❌ Erro ao renovar token ({resp.status_code}):", resp.text)
-            return False
+            print(f"⚠️ Lomadee campaigns retornou {resp.status_code}:", resp.text[:200])
+            return []
 
         data = resp.json()
+        campaigns = data.get("data", [])
 
-        ACCESS_TOKEN = data.get("access_token")
-        REFRESH_TOKEN = data.get("refresh_token")
+        for camp in campaigns:
+            if camp.get("status") != "active":
+                continue
 
-        print("🔄 Token renovado com sucesso!")
-        print(f"   Novo Access Token: {ACCESS_TOKEN[:25]}...")
-        print(f"   Novo Refresh Token: {REFRESH_TOKEN[:25]}...")
-        print("⚠️  IMPORTANTE: Atualize o REFRESH_TOKEN no Railway Dashboard com o valor acima!")
+            titulo = camp.get("name", "")
+            link = camp.get("trackingUrl") or camp.get("url", "")
+            descricao = camp.get("description", "")
 
-        return True
+            if not link or link in POSTADOS:
+                continue
+
+            preco = extrair_preco(descricao) or extrair_preco(titulo)
+            if preco and (preco < PRECO_MIN or preco > PRECO_MAX):
+                continue
+
+            ofertas.append({
+                "titulo": titulo[:100],
+                "link": link,
+                "preco": preco,
+                "descricao": descricao[:200],
+                "fonte": "Lomadee Campaign"
+            })
+            POSTADOS.add(link)
+
+            if len(ofertas) >= 5:
+                break
 
     except Exception as e:
-        print("❌ Falha ao renovar token:", e)
-        return False
+        print(f"❌ Erro Lomadee campaigns: {e}")
+
+    return ofertas
 
 
-# ========= OFERTAS =========
-def buscar_ofertas():
-    """Busca ofertas na API do Mercado Livre."""
-    global POSTADOS
+def buscar_produtos_lomadee():
+    """Busca produtos na Lomadee por palavras-chave."""
+    if not LOMADEE_API_KEY:
+        return []
 
-    if not ACCESS_TOKEN:
-        print("❌ ACCESS_TOKEN vazio. Tentando renovar...")
-        if not renovar_token():
-            return []
-
-    url = "https://api.mercadolibre.com/sites/MLB/search"
-
+    ofertas = []
     query = random.choice(PALAVRAS_CHAVE)
 
+    url = "https://api.lomadee.com.br/v3/products"
+    headers = {"x-api-key": LOMADEE_API_KEY}
     params = {
         "q": query,
-        "limit": 20,
-        "sort": "price_asc",
-        "condition": "new"
-    }
-
-    headers = {
-        "Authorization": f"Bearer {ACCESS_TOKEN}",
-        "User-Agent": "Mozilla/5.0"
+        "limit": 10,
+        "page": 1
     }
 
     try:
-        response = session.get(url, params=params, headers=headers, timeout=15)
+        respeitar_rate_limit()
+        resp = session.get(url, headers=headers, params=params, timeout=20)
 
-        # 🆕 Se deu 401, tenta renovar o token e refaz a requisição
-        if response.status_code == 401:
-            print("⚠️ Token expirou (401). Renovando automaticamente...")
-            if renovar_token():
-                headers["Authorization"] = f"Bearer {ACCESS_TOKEN}"
-                response = session.get(url, params=params, headers=headers, timeout=15)
-            else:
-                print("❌ Não foi possível renovar o token.")
-                return []
-
-        if response.status_code != 200:
-            print(f"❌ Erro API ({response.status_code}):", response.text)
+        if resp.status_code == 401:
+            print("❌ Lomadee API Key inválida. Verifique sua x-api-key.")
+            return []
+        if resp.status_code == 429:
+            print("⚠️ Rate limit atingido na Lomadee. Aguarde...")
+            return []
+        if resp.status_code != 200:
+            print(f"⚠️ Lomadee products retornou {resp.status_code}:", resp.text[:200])
             return []
 
-        # proteção contra JSON quebrado
-        try:
-            data = response.json()
-        except Exception:
-            print("❌ JSON inválido da API")
-            return []
+        data = resp.json()
+        produtos = data.get("data", [])
 
-        ofertas = []
+        for prod in produtos:
+            titulo = prod.get("name", "")
+            link = prod.get("trackingUrl") or prod.get("url", "")
+            preco = prod.get("price")
+            loja = prod.get("store", "")
 
-        for item in data.get("results", []):
-
-            titulo = item.get("title", "")
-            preco = item.get("price") or 0
-            link = item.get("permalink")
-            vendidos = item.get("sold_quantity", 0)
-
-            if not link:
+            if not link or link in POSTADOS:
                 continue
 
-            if preco < 80 or preco > 5000:
+            if preco and (preco < PRECO_MIN or preco > PRECO_MAX):
                 continue
 
-            if vendidos < 50:
-                continue
+            ofertas.append({
+                "titulo": titulo[:100],
+                "link": link,
+                "preco": preco,
+                "descricao": f"Loja: {loja}" if loja else "",
+                "fonte": "Lomadee Products"
+            })
+            POSTADOS.add(link)
 
-            agora = time.time()
-            if link in POSTADOS:
-                if agora - POSTADOS[link] < 3600:
-                    continue
-
-            POSTADOS[link] = agora
-
-            preco_antigo = preco * random.uniform(1.15, 1.35)
-
-            texto = f"""🔥 PROMOÇÃO RELÂMPAGO!
-
-📦 {titulo[:70]}
-
-💰 De: ~R$ {preco_antigo:.2f}~
-💸 Por: R$ {preco:.2f}
-
-⚠️ +{vendidos} vendidos | Alta procura!
-
-👉 {link}
-"""
-
-            ofertas.append(texto)
-
-            if len(ofertas) >= 3:
+            if len(ofertas) >= 5:
                 break
 
-        return ofertas
-
     except Exception as e:
-        print("❌ Erro ofertas:", e)
-        return []
+        print(f"❌ Erro Lomadee products: {e}")
+
+    return ofertas
+
+
+# ========= RSS FEEDS (FALLBACK) =========
+def buscar_ofertas_rss():
+    """Busca ofertas nos feeds RSS (fallback se Lomadee falhar)."""
+    ofertas = []
+
+    for feed_url in RSS_FEEDS:
+        try:
+            print(f"📡 Buscando RSS: {feed_url}")
+            resp = session.get(feed_url, timeout=20)
+
+            if resp.status_code != 200:
+                continue
+
+            root = ET.fromstring(resp.content)
+            items = root.findall(".//item")
+            if not items:
+                items = root.findall(".//{http://purl.org/rss/1.0/}item")
+            if not items:
+                items = root.findall(".//{http://www.w3.org/2005/Atom}entry")
+
+            for item in items:
+                titulo_elem = item.find("title")
+                link_elem = item.find("link")
+                desc_elem = item.find("description")
+
+                titulo = limpar_html(titulo_elem.text) if titulo_elem is not None else ""
+                link = link_elem.text if link_elem is not None else ""
+                descricao = limpar_html(desc_elem.text) if desc_elem is not None else ""
+
+                if not link or link in POSTADOS:
+                    continue
+
+                preco = extrair_preco(titulo) or extrair_preco(descricao)
+                if preco and (preco < PRECO_MIN or preco > PRECO_MAX):
+                    continue
+
+                fonte = feed_url.split("/")[2].replace("www.", "")
+                ofertas.append({
+                    "titulo": titulo[:100],
+                    "link": link,
+                    "preco": preco,
+                    "descricao": descricao[:200],
+                    "fonte": fonte
+                })
+                POSTADOS.add(link)
+
+                if len(ofertas) >= 10:
+                    break
+
+        except Exception as e:
+            print(f"⚠️ Erro RSS {feed_url}: {e}")
+
+    return ofertas
 
 
 # ========= TELEGRAM =========
 def enviar_telegram(mensagem):
+    """Envia mensagem para o canal do Telegram."""
     url = f"https://api.telegram.org/bot{TOKEN_TELEGRAM}/sendMessage"
 
     data = {
         "chat_id": CHAT_ID,
-        "text": mensagem
+        "text": mensagem,
+        "parse_mode": "Markdown",
+        "disable_web_page_preview": False
     }
 
     try:
-        resp = session.post(url, data=data, timeout=10)
-
+        resp = session.post(url, data=data, timeout=15)
         if resp.status_code != 200:
-            print("❌ Erro Telegram:", resp.text)
-
+            print(f"❌ Erro Telegram ({resp.status_code}):", resp.text[:200])
+        else:
+            print("✅ Mensagem enviada!")
     except Exception as e:
-        print("❌ Telegram erro:", e)
+        print(f"❌ Falha Telegram: {e}")
 
 
-# ========= EXECUÇÃO =========
+# ========= FORMATAÇÃO =========
+def formatar_oferta(oferta):
+    """Formata a oferta em mensagem para o Telegram."""
+    titulo = oferta["titulo"]
+    link = oferta["link"]
+    preco = oferta["preco"]
+    fonte = oferta["fonte"]
+
+    preco_str = f"R$ {preco:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") if preco else "💰 Confira o preço no site"
+
+    emoji = "🛒"
+    if "Lomadee" in fonte:
+        emoji = "💎 Lomadee (com comissão)"
+    elif "promobit" in fonte:
+        emoji = "🔴 Promobit"
+    elif "gatry" in fonte:
+        emoji = "🟠 Gatry"
+    elif "pelando" in fonte:
+        emoji = "🟢 Pelando"
+
+    texto = f"""🔥 *PROMOÇÃO ENCONTRADA!*
+
+📦 *{titulo}*
+
+💸 *{preco_str}*
+
+🏪 Fonte: {emoji}
+
+👉 [Ver oferta]({link})
+
+⏰ _{datetime.now().strftime("%d/%m/%Y %H:%M")}_
+"""
+    return texto
+
+
+# ========= EXECUÇÃO PRINCIPAL =========
 def postar_ofertas():
-    print(f"\n[{datetime.now()}] Buscando ofertas...")
+    """Busca ofertas na Lomadee (prioridade) e RSS (fallback)."""
+    print(f"\n🤖 [{datetime.now()}] Iniciando busca de ofertas...")
 
-    ofertas = buscar_ofertas()
+    ofertas = []
+
+    # 🥇 PRIORIDADE 1: Lomadee (com comissão)
+    if LOMADEE_API_KEY:
+        print("🔑 Buscando na Lomadee API...")
+        ofertas += buscar_campaigns_lomadee()
+        ofertas += buscar_produtos_lomadee()
+    else:
+        print("ℹ️ LOMADEE_API_KEY não configurada. Pulando Lomadee.")
+
+    # 🥈 PRIORIDADE 2: RSS feeds (fallback)
+    if not ofertas:
+        print("📡 Nenhuma oferta Lomadee. Buscando RSS feeds...")
+        ofertas += buscar_ofertas_rss()
 
     if not ofertas:
-        print("⚠️ Nenhuma oferta boa encontrada")
+        print("⚠️ Nenhuma oferta encontrada neste ciclo.")
         return
 
+    print(f"📦 {len(ofertas)} ofertas encontradas. Enviando...")
+
     for oferta in ofertas:
-        enviar_telegram(oferta)
-        time.sleep(2)
+        mensagem = formatar_oferta(oferta)
+        enviar_telegram(mensagem)
+        time.sleep(random.uniform(2, 4))
+
+    print(f"✅ Ciclo finalizado. Total no cache: {len(POSTADOS)} ofertas.")
 
 
-# ========= INICIALIZAÇÃO E AGENDAMENTO =========
-print("🤖 Bot PROFISSIONAL iniciando...")
-
-# 🆕 Renova o token imediatamente ao iniciar (evita 401 no primeiro ciclo)
-if not ACCESS_TOKEN:
-    print("ℹ️ ACCESS_TOKEN não encontrado nas variáveis. Renovando...")
-    renovar_token()
-else:
-    print("ℹ️ ACCESS_TOKEN encontrado. Verificando validade com renovação preventiva...")
-    # Opcional: renovar de qualquer forma para garantir token fresco
-    renovar_token()
-
-# Agendamentos
+# ========= AGENDAMENTO =========
 schedule.every(5).minutes.do(postar_ofertas)
-schedule.every(5).hours.do(renovar_token)  # token dura 6h, renova a cada 5h
 
-print("✅ Bot rodando. Aguardando próximos ciclos...")
+# ========= INICIALIZAÇÃO =========
+if __name__ == "__main__":
+    print("=" * 55)
+    print("🤖 BOT DE OFERTAS - Lomadee + RSS Fallback")
+    print("=" * 55)
 
-while True:
-    try:
-        schedule.run_pending()
-        time.sleep(1)
-    except Exception as e:
-        print("❌ Loop erro:", e)
-        time.sleep(5)
+    if LOMADEE_API_KEY:
+        print("🔑 Modo: Lomadee API (com comissão de afiliado)")
+        print(f"   API Key: {LOMADEE_API_KEY[:10]}...")
+    else:
+        print("📡 Modo: RSS Feeds (sem comissão - fallback)")
+        print("   Para ganhar comissão, configure LOMADEE_API_KEY")
+
+    print("=" * 55)
+
+    # Primeira execução imediata
+    postar_ofertas()
+
+    print("\n⏳ Aguardando próximos ciclos...")
+    while True:
+        try:
+            schedule.run_pending()
+            time.sleep(1)
+        except KeyboardInterrupt:
+            print("\n🛑 Bot encerrado pelo usuário.")
+            break
+        except Exception as e:
+            print(f"❌ Erro no loop principal: {e}")
+            time.sleep(5)
