@@ -5,6 +5,7 @@ import random
 import re
 from datetime import datetime
 import xml.etree.ElementTree as ET
+import os  # ← IMPORTAÇÃO ADICIONADA
 
 # ================= CONFIGURAÇÃO =================
 if os.getenv("RAILWAY_ENVIRONMENT") is None:
@@ -382,7 +383,7 @@ def postar_ofertas():
 
 
 # ========= AGENDAMENTO =========
-schedule.every(5).minutes.do(postar_ofertas)
+schedule.every(10).minutes.do(postar_ofertas)
 
 # ========= INICIALIZAÇÃO =========
 if __name__ == "__main__":
